@@ -24,10 +24,20 @@ class PingPong(object):
 
 class PongServer(threading.Thread, PingPong):
 
-    def __init__(self, port=80):
+    def __init__(self, port=80, clients=None):
         threading.Thread.__init__(self, daemon=True)
         self.log = self.get_logger('SERVER')
         self.port = port
+        self.parse_clients_to_map(clients)
+
+    def parse_clients_to_map(self, clients):
+        self.client_map = {}
+
+        if clients is not None:
+            for x in clients:
+                c = x.split(':')
+                if len(c) is 3:
+                    self.client_map[c[0]] = c[2]
 
     def setup_socket(self):
         self.socket = self.get_socket()
@@ -37,11 +47,27 @@ class PongServer(threading.Thread, PingPong):
 
     def handle_connection(self):
         connection, address = self.socket.accept()
+        client_details = connection.getpeername()
         buf = connection.recv(1024)
-        if len(buf) > 0:
-            self.log.info("{} says {}".format(address, buf.decode('utf-8')))
+        self.log_message(client_details, buf)
+
+        self.log_pong(client_details)
         connection.sendall(bytes('PONG', 'utf-8'))
         connection.close()
+
+    def get_client_name(self, client_details):
+        try:
+            name = self.client_map[client_details[0]]
+        except KeyError:
+            name = client_details[0]
+        return name
+
+    def log_message(self, client_details, message):
+        self.log.info("Got {} from {}".format(message.decode('utf-8'),
+                                              self.get_client_name(client_details)))
+
+    def log_pong(self, client_details):
+        self.log.info("sending pong to {}".format(self.get_client_name(client_details)))
 
     def run(self):
         self.setup_socket()
@@ -77,20 +103,23 @@ class PingClient(threading.Thread, PingPong):
 
     def send_pings(self):
         for client in self.clients:
-            response = self.send_ping(client[0], client[1])
-            self.log_response(client, response)
+            response = self.send_ping(client)
 
-    def send_ping(self, host, port):
+    def send_ping(self, client):
         sock = self.get_socket()
         try:
-            sock.connect((host, int(port)))
+            sock.connect((client[0], int(client[1])))
         except ConnectionRefusedError:
-            self.log.warn("{}:{} ConnectionRefusedError".format(host, port))
+            self.log.warn("{}:{} ConnectionRefusedError".format(client[0], client[1]))
             return
 
+        self.log_ping(client)
         sock.send(bytes('PING', 'utf-8'))
         buf = sock.recv(1024)
-        return buf
+        self.log_response(client, buf)
+
+    def log_ping(self, client):
+        self.log.info("sending ping to {}".format(client[2]))
 
     def log_response(self, client, response):
         if response is None:
@@ -133,7 +162,7 @@ if __name__ == '__main__':
     # SERVER SETUP
     if options.start_server:
         log.info("Starting server")
-        server = PongServer(port=options.server_port)
+        server = PongServer(port=options.server_port, clients=options.client)
         server.start()
 
     # CLIENT SETUP
